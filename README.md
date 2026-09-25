@@ -14,6 +14,8 @@ The customized Fishstrap build uses `FishstrapInstaller.exe` for updates instead
 
 When an update is detected, Fishstrap starts the installer from its install folder. The installer waits for Fishstrap to close, downloads the latest source reapplies the custom integrations and replaces the installed files with the new ones
 
+**The app doesn't auto update you need to re-install from the new github executable to update**
+
 ## Building
 
 Build the installer with:
@@ -26,12 +28,6 @@ The executable will be created at:
 
 ```text
 target\release\fishstrap-installer.exe
-```
-
-You can also use:
-
-```bat
-build.bat
 ```
 
 from the workspace path
