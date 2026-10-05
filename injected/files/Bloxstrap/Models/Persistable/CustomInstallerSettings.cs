@@ -6,6 +6,7 @@ namespace Bloxstrap.Models.Persistable
     {
         public bool UseExecutors { get; set; } = false;
         public string ExecutorChannel { get; set; } = "";
+        public bool MultiInstanceLaunching { get; set; } = false;
 
         public bool BanAsyncPreserveInGameSettings { get; set; } = true;
         public bool BanAsyncPreserveFastFlags { get; set; } = true;

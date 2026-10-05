@@ -20,6 +20,10 @@ const INJECTED_FILES: &[(&str, &str)] = &[
         include_str!("../injected/files/Bloxstrap/Models/Persistable/CustomInstallerSettings.cs"),
     ),
     (
+        "Bloxstrap/MultiInstanceWatcher.cs",
+        include_str!("../injected/files/Bloxstrap/MultiInstanceWatcher.cs"),
+    ),
+    (
         "Bloxstrap/Utility/VersionGuidValidator.cs",
         include_str!("../injected/files/Bloxstrap/Utility/VersionGuidValidator.cs"),
     ),
@@ -269,6 +273,95 @@ fn inject_source_changes(project_dir: &Path) -> Result<(), Box<dyn Error>> {
     inject_channel_interface(project_dir)?;
     inject_channel_view_model(project_dir)?;
     inject_bootstrapper(project_dir)?;
+    inject_multi_instance(project_dir)?;
+    Ok(())
+}
+
+fn inject_multi_instance(project_dir: &Path) -> Result<(), Box<dyn Error>> {
+    let path = project_dir.join("Bloxstrap/LaunchSettings.cs");
+    let mut contents = read_source(&path)?;
+    insert_before_once(
+        &mut contents,
+        "        public LaunchFlag BackgroundUpdaterFlag ",
+        "        public LaunchFlag MultiInstanceWatcherFlag  { get; } = new(\"multiinstancewatcher\");\n\n",
+        &path,
+    )?;
+    fs::write(&path, contents)?;
+    let path = project_dir.join("Bloxstrap/LaunchHandler.cs");
+    let mut contents = read_source(&path)?;
+    let branch = r#"            else if (App.LaunchSettings.MultiInstanceWatcherFlag.Active)
+            {
+                App.Logger.WriteLine(LOG_IDENT, "Opening multi-instance watcher");
+                MultiInstanceWatcher.Start();
+            }
+"#;
+    insert_before_once(
+        &mut contents,
+        "            else if (App.LaunchSettings.BackgroundUpdaterFlag.Active)\n",
+        branch,
+        &path,
+    )?;
+    replace_once(
+        &mut contents,
+        "Utilities.IsRobloxRunning() && launchMode != LaunchMode.Studio",
+        "Utilities.IsRobloxRunning() && !App.Settings.Prop.MultiInstanceLaunching && launchMode != LaunchMode.Studio",
+        &path,
+    )?;
+    fs::write(&path, contents)?;
+    let path = project_dir.join("Bloxstrap/RemoteData.cs");
+    let mut contents = read_source(&path)?;
+    replace_once(
+        &mut contents,
+        "if (App.Settings.Prop.ForceLocalData || App.LaunchSettings.WatcherFlag.Active)",
+        "if (App.Settings.Prop.ForceLocalData || App.LaunchSettings.WatcherFlag.Active || App.LaunchSettings.MultiInstanceWatcherFlag.Active)",
+        &path,
+    )?;
+    fs::write(&path, contents)?;
+    let path = project_dir.join("Bloxstrap/Bootstrapper.cs");
+    let mut contents = read_source(&path)?;
+    let launch = r#"                if (App.Settings.Prop.MultiInstanceLaunching)
+                    MultiInstanceWatcher.Launch();
+
+"#;
+    insert_before_once(
+        &mut contents,
+        "                if (App.Settings.Prop.ForceRobloxLanguage)\n",
+        launch,
+        &path,
+    )?;
+    fs::write(&path, contents)?;
+    let path = project_dir.join("Bloxstrap/UI/ViewModels/Settings/IntegrationsViewModel.cs");
+    let mut contents = read_source(&path)?;
+    let property = r#"        public bool MultiInstanceLaunchingEnabled
+        {
+            get => App.Settings.Prop.MultiInstanceLaunching;
+            set => App.Settings.Prop.MultiInstanceLaunching = value;
+        }
+
+"#;
+    insert_before_once(
+        &mut contents,
+        "        public ObservableCollection<CustomIntegration> CustomIntegrations\n",
+        property,
+        &path,
+    )?;
+    fs::write(&path, contents)?;
+    let path = project_dir.join("Bloxstrap/UI/Elements/Settings/Pages/IntegrationsPage.xaml");
+    let mut contents = read_source(&path)?;
+    let toggle = r#"        <controls:OptionControl
+            Header="Allow multi-instance launching"
+            Description="Allows for having more than one Roblox game client instance open simultaneously.">
+            <ui:ToggleSwitch IsChecked="{Binding MultiInstanceLaunchingEnabled, Mode=TwoWay}" />
+        </controls:OptionControl>
+
+"#;
+    insert_before_once(
+        &mut contents,
+        "        <TextBlock Text=\"{x:Static resources:Strings.Menu_Integrations_RobloxApp}\"",
+        toggle,
+        &path,
+    )?;
+    fs::write(&path, contents)?;
     Ok(())
 }
 
@@ -294,7 +387,7 @@ fn inject_app_startup(project_dir: &Path) -> Result<(), Box<dyn Error>> {
                     if (Settings.Prop.BanAsyncPersistent)
                         return;
                     foreach (string guid in Settings.Prop.BanAsyncSpoofedAdapterGuids.ToList())
-                        Utility.BanAsync.MacSpoofer.DeleteNetworkAddressByGuid(guid);
+                        Utility.BanAsync.MacSpoofer.ClearNetworkAddress(guid);
                 };
 "#;
     replace_once(&mut contents, marker, addition, &path)?;
@@ -400,7 +493,7 @@ fn inject_channel_view_model(project_dir: &Path) -> Result<(), Box<dyn Error>> {
         }
         private async Task RefreshExecutorsAsync()
         {
-            var result = await WeaoClient.GetWindowsExploitsAsync();
+            var result = await WeaoClient.GetExecutorsAsync();
             App.Current.Dispatcher.Invoke(() =>
             {
                 Executors.Clear();
@@ -474,7 +567,7 @@ fn inject_bootstrapper(project_dir: &Path) -> Result<(), Box<dyn Error>> {
                 if (App.Settings.Prop.UseExecutors && !IsStudioLaunch)
                 {
                     string executorName = App.Settings.Prop.ExecutorChannel;
-                    var result = await WeaoClient.GetWindowsExploitsAsync();
+                    var result = await WeaoClient.GetExecutorsAsync();
                     var executor = result.Exploits.FirstOrDefault(item =>
                         string.Equals(item.Title, executorName, StringComparison.OrdinalIgnoreCase));
                     if (executor is null)
