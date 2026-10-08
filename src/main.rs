@@ -73,13 +73,15 @@ struct Config {
 }
 
 fn main() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        wait_forever();
+    }));
     if let Err(err) = run() {
         eprintln!("installer failed: {err}");
-        if !env::args().any(|arg| arg == "--no-pause") {
-            wait_for_enter();
-        }
-        std::process::exit(1);
     }
+    wait_forever();
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
@@ -178,7 +180,7 @@ fn required_value(
 }
 
 fn print_help() {
-    println!("usage: install.exe [--repo <url>] [--branch <name>] [--out <dir>] [--keep-temp] [--build-only] [--wait-pid <pid>] [--app-arg <arg>] [--no-pause]");
+    println!("usage: install.exe [--repo <url>] [--branch <name>] [--out <dir>] [--keep-temp] [--build-only] [--wait-pid <pid>] [--app-arg <arg>]");
     println!();
     println!("defaults:");
     println!("  --repo          {DEFAULT_FISHSTRAP_REPO}");
@@ -628,7 +630,6 @@ fn replace_updater_body(contents: &mut String, path: &Path) -> Result<(), Box<dy
                 startInfo.ArgumentList.Add(Paths.Base);
                 startInfo.ArgumentList.Add("--wait-pid");
                 startInfo.ArgumentList.Add(Environment.ProcessId.ToString());
-                startInfo.ArgumentList.Add("--no-pause");
                 foreach (string arg in App.LaunchSettings.Args)
                 {
                     startInfo.ArgumentList.Add("--app-arg");
@@ -780,17 +781,28 @@ fn ensure_tool(command: &str, winget_id: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
+fn dotnet_sdk_version(project_dir: &Path) -> Result<String, String> {
+    let dotnet = find_command("dotnet").ok_or("couldn't find dotnet.exe")?;
+    let output = Command::new(&dotnet)
+        .arg("--version")
+        .current_dir(project_dir)
+        .env("DOTNET_NOLOGO", "1")
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .map_err(|err| err.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!("{}{}", stderr.trim(), stdout.trim()))
+    }
+}
+
 fn ensure_dotnet_sdk(project_dir: &Path) -> Result<(), Box<dyn Error>> {
-    if let Some(dotnet) = find_command("dotnet") {
-        let output = Command::new(&dotnet)
-            .arg("--version")
-            .current_dir(project_dir)
-            .output()?;
-        if output.status.success() {
-            let version = String::from_utf8_lossy(&output.stdout);
-            println!("using .NET SDK {}", version.trim());
-            return Ok(());
-        }
+    if let Ok(version) = dotnet_sdk_version(project_dir) {
+        println!("using .NET SDK {version}");
+        return Ok(());
     }
     let requested = read_requested_sdk(project_dir).unwrap_or_else(|| "8.0.100".to_string());
     let major = requested
@@ -798,7 +810,7 @@ fn ensure_dotnet_sdk(project_dir: &Path) -> Result<(), Box<dyn Error>> {
         .next()
         .filter(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()))
         .ok_or_else(|| format!("invalid .NET SDK version in global.json: {requested}"))?;
-    let package = format!("microsoft.DotNet.SDK.{major}");
+    let package = format!("Microsoft.DotNet.SDK.{major}");
     println!("the required .NET SDK {requested} isn't installed");
     if find_command("winget").is_none() {
         return Err(format!(
@@ -813,7 +825,7 @@ fn ensure_dotnet_sdk(project_dir: &Path) -> Result<(), Box<dyn Error>> {
     if matches!(answer.trim().to_ascii_lowercase().as_str(), "n" | "no") {
         return Err(format!("can't continue without .NET SDK {requested}").into());
     }
-    run_command(
+    if let Err(err) = run_command(
         "winget",
         [
             "install",
@@ -826,24 +838,18 @@ fn ensure_dotnet_sdk(project_dir: &Path) -> Result<(), Box<dyn Error>> {
             "--accept-source-agreements",
         ],
         None,
-    )?;
-    let dotnet = find_command("dotnet")
-        .ok_or("installed the .NET SDK, but still couldn't find dotnet.exe")?;
-    let output = Command::new(&dotnet)
-        .arg("--version")
-        .current_dir(project_dir)
-        .output()?;
-    if output.status.success() {
-        let version = String::from_utf8_lossy(&output.stdout);
-        println!("using .NET SDK {}", version.trim());
-        Ok(())
-    } else {
-        let error = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "the .NET SDK install finished, but this project still can't resolve SDK {requested}: {}",
-            error.trim()
+    ) {
+        println!("winget reported a problem ({err}), checking if the SDK is usable anyway");
+    }
+    match dotnet_sdk_version(project_dir) {
+        Ok(version) => {
+            println!("using .NET SDK {version}");
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "this project still can't resolve .NET SDK {requested} after the winget install: {error}\nyou can install it manually from https://dotnet.microsoft.com/download/dotnet/{major}.0"
         )
-        .into())
+        .into()),
     }
 }
 
@@ -1107,8 +1113,9 @@ fn timestamp() -> Result<u64, Box<dyn Error>> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 
-fn wait_for_enter() {
-    eprintln!("press enter to exit.");
-    let mut buffer = String::new();
-    let _ = io::stdin().read_line(&mut buffer);
+fn wait_forever() -> ! {
+    eprintln!("done. press ctrl+c or close this window to exit.");
+    loop {
+        std::thread::park();
+    }
 }

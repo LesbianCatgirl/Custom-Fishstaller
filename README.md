@@ -47,7 +47,6 @@ Available arguments:
 --keep-temp          Keep the temporary source folder
 --build-only         Build and test integrations without installing
 --wait-pid <pid>     Wait for a process to exit before updating files
---no-pause           Dont pause after errors
 ```
 
 You can also set:
